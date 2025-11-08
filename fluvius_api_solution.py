@@ -22,7 +22,7 @@ FLUVIUS_PASSWORD =
 FLUVIUS_EAN = 
 METER_SERIAL = 
 
-def get_bearer_token():
+def get_bearer_token(login=FLUVIUS_LOGIN, password=FLUVIUS_PASSWORD):
     """
     Authenticate with Fluvius and extract Bearer token
     This only needs to be run once to get the token
@@ -48,10 +48,10 @@ def get_bearer_token():
         
         # Step 3: Enter credentials
         email_input = wait.until(EC.visibility_of_element_located((By.ID, 'signInName')))
-        email_input.send_keys(FLUVIUS_LOGIN)
+        email_input.send_keys(login)
         
         password_input = driver.find_element(By.ID, "password")
-        password_input.send_keys(FLUVIUS_PASSWORD)
+        password_input.send_keys(password)
         
         # Step 4: Submit login
         login_button = driver.find_element(By.ID, 'next')
