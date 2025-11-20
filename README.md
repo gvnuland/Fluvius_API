@@ -4,33 +4,47 @@ A Python solution to authenticate with Fluvius (Belgian energy provider) and ret
 
 ## 🎯 What This Does
 
-- ✅ **Authenticates** with Fluvius using Azure B2C (one-time browser automation)
-- ✅ **Extracts Bearer token** for API access
-- ✅ **Retrieves consumption data** via REST API calls
-- ✅ **Analyzes energy usage** including solar injection
-- ✅ **No browser needed** for API calls after authentication
+- **Authenticates** with Fluvius using the same Azure B2C PKCE flow the website uses (pure HTTP, no browser)
+- **Extracts Bearer token** for API access
+- **Retrieves consumption data** via REST API calls
+- **Analyzes energy usage** including solar injection
 
 ## 📋 Requirements
 
-```bash
-pip install selenium selenium-wire beautifulsoup4 requests
-```
+- Python 3.9+
+- `requests` (install with `pip install -r requirements.txt`)
 
-You'll also need Chrome browser installed for the initial authentication.
-
+Both `fluvius_fetch_token.py` and `fluvius_api_solution.py` rely on the same dependency list.
 ## 🚀 Quick Start
 
 ### 1. Configuration
 
-Edit the credentials in `fluvius_api_solution.py`:
+Provide your Fluvius credentials and meter information via environment variables or CLI arguments:
 
-```python
-# Your credentials and meter info
-FLUVIUS_LOGIN = "your.email@example.com"
-FLUVIUS_PASSWORD = "your_password"
-FLUVIUS_EAN = "your_ean_number"
-METER_SERIAL = "your_meter_serial"
+```bash
+set FLUVIUS_LOGIN=your.email@example.com
+set FLUVIUS_PASSWORD=your_password
+set FLUVIUS_EAN=5414488200XXXXXXX
+set FLUVIUS_METER_SERIAL=1SAG1100XXXXXXX
 ```
+
+Alternatively, pass them explicitly when running the script:
+
+```bash
+python fluvius_api_solution.py ^
+  --email your.email@example.com ^
+  --password LOUVRE ^
+  --ean 5414488200XXXXXXX ^
+  --meter-serial 1SAG1100XXXXXXX ^
+  --days-back 7
+```
+
+Optional flags:
+- `--bearer-token <token>`: skip authentication and reuse an existing token
+- `--remember-me`: forwards the rememberMe flag to Fluvius
+- `--output <path>`: override the output JSON path (default `fluvius_consumption_data.json`)
+- `--timezone <IANA name>`: choose which timezone to use for `historyFrom`/`historyUntil` (default `Europe/Brussels` or `FLUVIUS_TIMEZONE`)
+- `--granularity <value>`: override the Fluvius granularity parameter (`3`=quarter-hour, `4`=daily; default `4` or `FLUVIUS_GRANULARITY`)
 
 ### 2. Run the Solution
 
@@ -39,21 +53,25 @@ python fluvius_api_solution.py
 ```
 
 This will:
-1. Authenticate and get your Bearer token
-2. Retrieve 7 days of consumption data
+1. Call `fluvius_fetch_token.py` to obtain a Bearer token via HTTP
+2. Retrieve the requested number of days of consumption data
 3. Analyze and display your energy usage
-4. Save raw data to `fluvius_consumption_data.json`
+4. Save raw data to `fluvius_consumption_data.json` (or your chosen path)
 
 ## 📊 API Usage
 
-### Get Bearer Token (One-time)
+### Get Bearer Token Programmatically
 
 ```python
-from fluvius_api_solution import get_bearer_token
+from fluvius_fetch_token import get_bearer_token_http
 
-# Authenticate once to get token
-token = get_bearer_token()
-print(f"Token: {token}")
+token, token_payload = get_bearer_token_http(
+  email="your.email@example.com",
+  password="your_password",
+  remember_me=False,
+  verbose=True,
+)
+print(f"Token: {token[:40]}...")
 ```
 
 ### Get Consumption Data
@@ -61,12 +79,11 @@ print(f"Token: {token}")
 ```python
 from fluvius_api_solution import get_consumption_data
 
-# Get consumption data for any period
 data = get_consumption_data(
-    bearer_token=token,
-    ean="541448820044159229",
-    meter_serial="1SAG1100042062",
-    days_back=30  # Last 30 days
+  access_token=token,
+  ean="5414488200441XXXXX",S
+  meter_serial="1SAG11000XXXXX",
+  days_back=30,
 )
 ```
 
@@ -182,8 +199,8 @@ response = requests.get(url, params={
 
 ```python
 meters = [
-    {"ean": "541448820044159229", "serial": "1SAG1100042062"},
-    {"ean": "541448820044159236", "serial": "1SAG1100042063"}
+    {"ean": "5414488XXXXXXXXXXX", "serial": "1SAG1100042062"},
+    {"ean": "5414488XXXXXXXXXXX", "serial": "1SAG1100042063"}
 ]
 
 for meter in meters:
@@ -195,12 +212,13 @@ for meter in meters:
 ## 📁 File Structure
 
 ```
-fluvius-api/
-├── fluvius_api_solution.py     # Main solution
-├── test_exact_api.py           # Test script
-├── fluvius_consumption_data.json  # Your data (generated)
-├── requirements.txt            # Dependencies
-└── README.md                   # This guide
+Fluvius_API/
+├── fluvius_api_solution.py      # CLI + analysis helpers
+├── fluvius_fetch_token.py       # HTTP-only authenticator
+├── example_usage.py             # Sample helper script
+├── requirements.txt             # Python dependency
+├── README.md                    # This guide
+└── (generated) fluvius_consumption_data.json
 ```
 
 ## 🔍 Finding Your Meter Information
@@ -219,47 +237,34 @@ fluvius-api/
 
 ### Authentication Issues
 
-**Problem:** "No Bearer token found"
-```python
-# Solution: Check credentials and try again
-token = get_bearer_token()
-```
+**Problem:** `Authentication failed: ...`
+- Verify the email/password or the `FLUVIUS_*` environment variables
+- Re-run with `--quiet` removed to see the detailed HTTP steps
+- If you have 2FA active on your account, disable it (Azure B2C policy currently expects password-only)
 
-**Problem:** "Authentication failed"
-- Verify your email and password are correct
-- Make sure you can login manually to mijn.fluvius.be
-- Check if you have 2FA enabled (not currently supported)
+**Problem:** `Token endpoint error (4xx)`
+- Fluvius sometimes rotates MSAL metadata; run again so the script refreshes config
+- Ensure your IP is not blocked by too many rapid attempts
 
 ### API Issues
 
 **Problem:** "400 Bad Request" with date validation errors
-```python
-# Solution: Ensure correct date format
-date_str = "2025-06-30T00:00:00.000+02:00"  # Correct format
-```
+- Ensure you requested a positive `--days-back`
+- Double-check custom date ranges follow `YYYY-MM-DDTHH:MM:SS.mmm+TZ`
+- If you're outside Belgium, pass `--timezone Europe/Brussels` (or your desired zone) so the offset matches Fluvius expectations
 
 **Problem:** "401 Unauthorized"
-```python
-# Solution: Token expired, get a new one
-token = get_bearer_token()
-```
+- Token likely expired; either rerun the CLI or pass a fresh value via `--bearer-token`
 
 **Problem:** Empty data returned
 - Check if your EAN and meter serial are correct
 - Verify the date range (data might not be available for future dates)
 - Ensure your meter is active and reporting data
 
-### Browser Issues
+### Networking Issues
 
-**Problem:** Selenium crashes
-```bash
-# Install Chrome and ChromeDriver
-# Ubuntu/Debian:
-sudo apt-get update
-sudo apt-get install google-chrome-stable
-
-# Or update Chrome to latest version
-```
+- If you see timeouts, rerun with `--quiet` disabled to view which HTTP hop failed
+- Corporate proxies may block the Azure B2C endpoints; configure the `HTTP(S)_PROXY` env vars if needed
 
 ## 📈 Data Analysis Examples
 
@@ -331,11 +336,10 @@ FLUVIUS_PASSWORD = os.getenv('FLUVIUS_PASSWORD')
 
 This is an unofficial solution. For official support:
 - Fluvius Customer Service: https://www.fluvius.be/contact
-- Official API: Check Fluvius developer portal (if available)
 
 ## 📄 License
 
-This project is for educational and personal use only. Respect Fluvius's terms of service and rate limits.
+This project is for educational and personal use only. 
 
 ---
 

@@ -1,246 +1,223 @@
 #!/usr/bin/env python3
-"""
-Complete working Fluvius API solution
-✅ Authenticates with Azure B2C
-✅ Gets Bearer token
-✅ Makes successful API calls
-✅ Returns valid JSON consumption data
-"""
+from __future__ import annotations
 
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from seleniumwire import webdriver
+import argparse
 import json
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Iterable, List, Optional
+
 import requests
-import time
-from datetime import datetime, timedelta
 
-# Your credentials and meter info
-FLUVIUS_LOGIN = 
-FLUVIUS_PASSWORD = 
-FLUVIUS_EAN = 
-METER_SERIAL = 
+from fluvius_fetch_token import FluviusAuthError, get_bearer_token_http
 
-def get_bearer_token(login=FLUVIUS_LOGIN, password=FLUVIUS_PASSWORD):
-    """
-    Authenticate with Fluvius and extract Bearer token
-    This only needs to be run once to get the token
-    """
-    chrome_options = webdriver.ChromeOptions()
-    chrome_options.add_argument('--headless')
-    chrome_options.add_argument('--no-sandbox')
-    chrome_options.add_argument('--disable-dev-shm-usage')
-    seleniumwire_options = {'enable_har': True}
-    
-    driver = webdriver.Chrome(options=chrome_options, seleniumwire_options=seleniumwire_options)
-    
-    try:
-        print("🔐 Authenticating with Fluvius...")
-        
-        # Step 1: Go to main page
-        driver.get('https://mijn.fluvius.be')
-        
-        # Step 2: Click personal account button
-        wait = WebDriverWait(driver, 20)
-        button = wait.until(EC.element_to_be_clickable((By.XPATH, '//button[@data-testid="b2c-account-type-selection-button-personal"]')))
-        button.click()
-        
-        # Step 3: Enter credentials
-        email_input = wait.until(EC.visibility_of_element_located((By.ID, 'signInName')))
-        email_input.send_keys(login)
-        
-        password_input = driver.find_element(By.ID, "password")
-        password_input.send_keys(password)
-        
-        # Step 4: Submit login
-        login_button = driver.find_element(By.ID, 'next')
-        login_button.click()
-        
-        # Step 5: Wait for redirect
-        wait.until(lambda d: 'mijn.fluvius.be' in d.current_url and 'b2clogin' not in d.current_url)
-        
-        # Step 6: Accept cookies
-        try:
-            cookie_button = wait.until(EC.element_to_be_clickable((By.XPATH, '//button[@id="fluv-cookies-button-accept-all"]')))
-            cookie_button.click()
-        except:
-            pass
-        
-        # Step 7: Navigate to verbruik to trigger API calls
-        driver.get('https://mijn.fluvius.be/verbruik')
-        time.sleep(5)
-        
-        # Step 8: Extract Bearer token from captured requests
-        for request in driver.requests:
-            if '/api/' in request.url and request.headers.get('Authorization'):
-                auth_header = request.headers['Authorization']
-                if auth_header.startswith('Bearer'):
-                    print(f"✅ Successfully got Bearer token")
-                    return auth_header
-        
-        print("❌ No Bearer token found")
-        return None
-        
-    finally:
-        driver.quit()
+try:  # Python 3.9+
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+except ImportError:  # pragma: no cover - Windows without tzdata
+    ZoneInfo = None  # type: ignore
+    ZoneInfoNotFoundError = Exception  # type: ignore
 
-def get_consumption_data(bearer_token, ean, meter_serial, days_back=7):
-    """
-    Get meter measurement history data
-    
-    Args:
-        bearer_token: Authentication token from get_bearer_token()
-        ean: Your EAN number (e.g., "541448820XXXXXXX")
-        meter_serial: Your meter serial number (e.g., "1SAG110XXXXXXXXXX")
-        days_back: Number of days of history to retrieve
-    
-    Returns:
-        dict: JSON response with consumption data, or None if failed
-    """
-    
-    # Calculate date range
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=days_back)
-    
-    # Format dates exactly as required by the API
-    history_from = start_date.strftime('%Y-%m-%dT00:00:00.000+02:00')
-    history_until = end_date.strftime('%Y-%m-%dT23:59:59.999+02:00')
-    
-    url = f"https://mijn.fluvius.be/verbruik/api/meter-measurement-history/{ean}"
-    
-    params = {
-        'historyFrom': history_from,
-        'historyUntil': history_until,
-        'granularity': '3',
-        'asServiceProvider': 'false',
-        'meterSerialNumber': meter_serial
-    }
-    
-    headers = {
-        'Authorization': bearer_token,
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    }
-    
-    print(f"📊 Getting {days_back} days of consumption data...")
-    
-    response = requests.get(url, params=params, headers=headers)
-    
-    if response.status_code == 200:
-        try:
-            data = response.json()
-            print(f"✅ Successfully retrieved {len(data)} days of data")
-            return data
-        except:
-            print("❌ Failed to parse JSON response")
-            return None
-    else:
-        print(f"❌ API call failed: {response.status_code}")
-        print(f"Error: {response.text[:200]}...")
-        return None
 
-def analyze_consumption_data(data):
-    """
-    Analyze and display consumption data in a readable format
-    """
-    if not data:
-        print("❌ No data to analyze")
-        return
-    
-    print(f"\n📊 CONSUMPTION ANALYSIS:")
-    print(f"=" * 50)
-    
-    total_days = len(data)
-    print(f"📅 Period: {total_days} days")
-    
-    for day_idx, day_data in enumerate(data):
-        date = day_data.get('d', 'Unknown date')
-        date_end = day_data.get('de', 'Unknown end date')
-        values = day_data.get('v', [])
-        
-        print(f"\n📅 Day {day_idx + 1}: {date}")
-        
-        # Sum up consumption for the day
-        day_consumption = 0
-        day_injection = 0
-        
-        for reading in values:
-            direction = reading.get('dc', 0)  # 1 = consumption, 2 = injection
-            tariff = reading.get('t', 0)      # 1 = high tariff, 2 = low tariff
-            value = reading.get('v', 0)       # actual value in kWh
-            
-            if direction == 1:  # Consumption
-                day_consumption += value
-                tariff_name = "High" if tariff == 1 else "Low"
-                print(f"   ⚡ Consumption ({tariff_name}): {value:.3f} kWh")
-            elif direction == 2:  # Injection (solar panels)
-                day_injection += value
-                tariff_name = "High" if tariff == 1 else "Low"
-                print(f"   ☀️ Injection ({tariff_name}): {value:.3f} kWh")
-        
-        net_consumption = day_consumption - day_injection
-        print(f"   📊 Total consumption: {day_consumption:.3f} kWh")
-        print(f"   📊 Total injection: {day_injection:.3f} kWh")
-        print(f"   📊 Net consumption: {net_consumption:.3f} kWh")
-
-def main():
-    """
-    Main function demonstrating the complete solution
-    """
-    print("=" * 60)
-    print("🏠 FLUVIUS API - COMPLETE WORKING SOLUTION")
-    print("=" * 60)
-    
-    # Step 1: Get Bearer token (authentication)
-    print("\nStep 1: Authentication...")
-    bearer_token = get_bearer_token()
-    
-    if not bearer_token:
-        print("❌ Authentication failed")
-        return
-    
-    print(f"✅ Authentication successful")
-    print(f"🔑 Token: {bearer_token[:50]}...")
-    
-    # Step 2: Get consumption data
-    print("\nStep 2: Retrieving consumption data...")
-    consumption_data = get_consumption_data(
-        bearer_token=bearer_token,
-        ean=FLUVIUS_EAN,
-        meter_serial=METER_SERIAL,
-        days_back=7  # Get last 7 days
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Fetch a Fluvius access token via the HTTP flow and download consumption data.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    
-    if consumption_data:
-        # Step 3: Save raw data
-        with open('fluvius_consumption_data.json', 'w') as f:
-            json.dump(consumption_data, f, indent=2)
-        print("💾 Raw data saved to fluvius_consumption_data.json")
-        
-        # Step 4: Analyze data
-        analyze_consumption_data(consumption_data)
-        
-        # Step 5: Show how to use programmatically
-        print(f"\n" + "=" * 60)
-        print("🔧 HOW TO USE THIS PROGRAMMATICALLY:")
-        print("=" * 60)
-        print("1. Call get_bearer_token() once to authenticate")
-        print("2. Use the token with get_consumption_data() to fetch data")
-        print("3. The token works for multiple API calls until it expires")
-        print(f"4. Your EAN: {FLUVIUS_EAN}")
-        print(f"5. Your meter serial: {METER_SERIAL}")
-        
-        print(f"\n📋 EXAMPLE CODE:")
-        print(f"```python")
-        print(f"token = get_bearer_token()")
-        print(f"data = get_consumption_data(token, '{FLUVIUS_EAN}', '{METER_SERIAL}', days_back=30)")
-        print(f"```")
-        
-        print(f"\n🎉 SUCCESS! You now have a complete working solution!")
-        
-    else:
-        print("❌ Failed to retrieve consumption data")
+    parser.add_argument("--email", default=os.getenv("FLUVIUS_LOGIN"), help="Fluvius account email")
+    parser.add_argument("--password", default=os.getenv("FLUVIUS_PASSWORD"), help="Fluvius account password")
+    parser.add_argument("--ean", default=os.getenv("FLUVIUS_EAN"), help="EAN number for the meter")
+    parser.add_argument("--meter-serial", default=os.getenv("FLUVIUS_METER_SERIAL"), help="Meter serial number")
+    parser.add_argument("--days-back", type=int, default=7, help="How many days of history to request")
+    parser.add_argument("--remember-me", action="store_true", help="Forward rememberMe flag during login")
+    parser.add_argument(
+        "--timezone",
+        default=os.getenv("FLUVIUS_TIMEZONE", "Europe/Brussels"),
+        help="IANA timezone used to build historyFrom/historyUntil (default: Europe/Brussels)",
+    )
+    parser.add_argument(
+        "--granularity",
+        default=os.getenv("FLUVIUS_GRANULARITY", "4"),
+        help="Fluvius API granularity value (3=quarter-hour, 4=daily).",
+    )
+    parser.add_argument(
+        "--bearer-token",
+        help="Skip authentication and reuse an existing Bearer token (with or without the 'Bearer ' prefix).",
+    )
+    parser.add_argument("--output", default="fluvius_consumption_data.json", help="Path to store the raw JSON response")
+    parser.add_argument("--quiet", action="store_true", help="Reduce log noise while fetching the token")
+
+    args = parser.parse_args()
+    if not args.bearer_token:
+        if not args.email:
+            parser.error("Missing --email (or FLUVIUS_LOGIN)")
+        if not args.password:
+            parser.error("Missing --password (or FLUVIUS_PASSWORD)")
+    if not args.ean:
+        parser.error("Missing --ean (or FLUVIUS_EAN)")
+    if not args.meter_serial:
+        parser.error("Missing --meter-serial (or FLUVIUS_METER_SERIAL)")
+    return args
+
+
+def _strip_bearer_prefix(token: str) -> str:
+    lowered = token.strip()
+    if lowered.lower().startswith("bearer "):
+        return lowered.split(" ", 1)[1]
+    return lowered
+
+
+def request_access_token(args: argparse.Namespace) -> str:
+    if args.bearer_token:
+        return _strip_bearer_prefix(args.bearer_token)
+
+    access_token, _ = get_bearer_token_http(
+        args.email,
+        args.password,
+        remember_me=args.remember_me,
+        verbose=not args.quiet,
+    )
+    return access_token
+
+
+def _resolve_timezone(name: Optional[str]):
+    if name and ZoneInfo is not None:
+        try:
+            return ZoneInfo(name)
+        except ZoneInfoNotFoundError:
+            print(f"Warning: timezone '{name}' not found, falling back to system local timezone.")
+    local = datetime.now().astimezone().tzinfo
+    if local:
+        return local
+    return timezone.utc
+
+
+def _build_history_range(days_back: int, tz_name: Optional[str]) -> Dict[str, str]:
+    tzinfo = _resolve_timezone(tz_name)
+    local_now = datetime.now(tzinfo)
+    start_date = (local_now - timedelta(days=days_back)).replace(hour=0, minute=0, second=0, microsecond=0)
+    end_date = local_now.replace(hour=23, minute=59, second=59, microsecond=999000)
+    return {
+        "historyFrom": start_date.isoformat(timespec="milliseconds"),
+        "historyUntil": end_date.isoformat(timespec="milliseconds"),
+    }
+
+
+def get_consumption_data(
+    access_token: str,
+    ean: str,
+    meter_serial: str,
+    days_back: int = 7,
+    tz_name: Optional[str] = "Europe/Brussels",
+    granularity: str = "4",
+) -> Optional[List[Dict[str, Any]]]:
+    date_range = _build_history_range(days_back, tz_name)
+
+    url = f"https://mijn.fluvius.be/verbruik/api/meter-measurement-history/{ean}"
+    params = {
+        **date_range,
+        "granularity": str(granularity),
+        "asServiceProvider": "false",
+        "meterSerialNumber": meter_serial,
+    }
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    }
+
+    print(
+        f"Getting {days_back} days of consumption data (granularity={params['granularity']}, tz={date_range['historyFrom'][-6:]})..."
+    )
+    try:
+        response = requests.get(url, params=params, headers=headers, timeout=30)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        print(f"API call failed: {exc}")
+        return None
+
+    try:
+        data = response.json()
+    except ValueError as exc:
+        print(f"Failed to parse JSON response: {exc}")
+        return None
+
+    print(f"Successfully retrieved {len(data)} days of data")
+    return data
+
+
+def analyze_consumption_data(data: Iterable[Dict[str, Any]]) -> None:
+    sample = list(data)
+    if not sample:
+        print("No data to analyze")
+        return
+
+    print("\nCONSUMPTION ANALYSIS:")
+    print("=" * 50)
+    print(f"Period: {len(sample)} days")
+
+    for day_idx, day_data in enumerate(sample):
+        date = day_data.get("d", "Unknown date")
+        values = day_data.get("v", [])
+        print(f"\n📅 Day {day_idx + 1}: {date}")
+
+        day_consumption = 0.0
+        day_injection = 0.0
+        for reading in values:
+            direction = reading.get("dc", 0)
+            tariff = reading.get("t", 0)
+            value = float(reading.get("v", 0))
+            tariff_name = "High" if tariff == 1 else "Low"
+
+            if direction == 1:
+                day_consumption += value
+                print(f"   Consumption ({tariff_name}): {value:.3f} kWh")
+            elif direction == 2:
+                day_injection += value
+                print(f"   Injection ({tariff_name}): {value:.3f} kWh")
+
+        net_consumption = day_consumption - day_injection
+        print(f"   Total consumption: {day_consumption:.3f} kWh")
+        print(f"   Total injection: {day_injection:.3f} kWh")
+        print(f"   Net consumption: {net_consumption:.3f} kWh")
+
+
+def main() -> int:
+    args = _parse_args()
+
+    print("=" * 60)
+    print("🏠 FLUVIUS API - HTTP-BASED SOLUTION")
+    print("=" * 60)
+
+    try:
+        access_token = request_access_token(args)
+    except FluviusAuthError as exc:
+        print(f"Authentication failed: {exc}", file=sys.stderr)
+        return 1
+    except requests.RequestException as exc:
+        print(f"Network error while fetching token: {exc}", file=sys.stderr)
+        return 1
+
+    print("Authentication successful")
+
+    data = get_consumption_data(
+        access_token,
+        args.ean,
+        args.meter_serial,
+        args.days_back,
+        args.timezone,
+        args.granularity,
+    )
+    if not data:
+        return 1
+
+    with open(args.output, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2)
+    print(f"Raw data saved to {args.output}")
+
+    analyze_consumption_data(data)
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -1,0 +1,4 @@
+fluvius_consumption_data.json
+__pycache__/
+env/
+.venv/
