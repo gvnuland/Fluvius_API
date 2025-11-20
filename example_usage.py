@@ -3,7 +3,7 @@
 Example usage of the Fluvius API solution
 Demonstrates various ways to use the API
 """
-
+from fluvius_fetch_token import FluviusAuthError, get_bearer_token_http
 from fluvius_api_solution import get_bearer_token, get_consumption_data, analyze_consumption_data
 import json
 import csv
@@ -15,7 +15,7 @@ def example_basic_usage():
     
     # Step 1: Get authentication token (only needed once)
     print("Getting Bearer token...")
-    token = get_bearer_token()
+    token = get_bearer_token_http()
     
     if not token:
         print("❌ Failed to get token")
