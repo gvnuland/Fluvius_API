@@ -4,7 +4,7 @@ Example usage of the Fluvius API solution
 Demonstrates various ways to use the API
 """
 from fluvius_fetch_token import FluviusAuthError, get_bearer_token_http
-from fluvius_api_solution import get_bearer_token, get_consumption_data, analyze_consumption_data
+from fluvius_api_solution import get_consumption_data, analyze_consumption_data
 import json
 import csv
 from datetime import datetime, timedelta
@@ -40,7 +40,7 @@ def example_export_to_csv():
     """Export consumption data to CSV"""
     print("\n=== Export to CSV Example ===")
     
-    token = get_bearer_token()
+    token = get_bearer_token_http()
     data = get_consumption_data(token, "5414488XXXXXXXX", "1SAG1100XXXXXXXXXXXXXXXX", days_back=30)
     
     if data:
@@ -66,7 +66,7 @@ def example_monthly_summary():
     """Calculate monthly summary statistics"""
     print("\n=== Monthly Summary Example ===")
     
-    token = get_bearer_token()
+    token = get_bearer_token_http()
     data = get_consumption_data(token, "XXXXXXXXXXXXXXXXXXXXx", "XXXXXXXXXXXXXXXXXXXXXXX", days_back=30)
     
     if data:
@@ -116,7 +116,7 @@ def example_custom_date_range():
     
     import requests
     
-    token = get_bearer_token()
+    token = get_bearer_token_http()
     
     # Define custom date range (e.g., June 2025)
     start_date = datetime(2025, 6, 1)
@@ -164,7 +164,7 @@ def example_token_reuse():
     
     # Get token once
     print("Getting token once...")
-    token = get_bearer_token()
+    token = get_bearer_token_http()
     
     if not token:
         return
